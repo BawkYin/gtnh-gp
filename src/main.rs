@@ -106,6 +106,150 @@ pub enum SingleKind {
 /// 用到的时候在写
 pub enum MultiKind {}
 
+// 电压等级
+pub enum VoltageTier {
+    ULV,
+    LV,
+    MV,
+    HV,
+    EV,
+    IV,
+    LUV,
+    ZPM,
+    UV,
+    UHV,
+    UEV,
+    UIV,
+    UMV,
+    UXV,
+    MAX,
+}
+
+impl VoltageTier {
+    /// 将电压转换成对应的电压
+    pub fn standard_voltage(&self) -> u64 {
+        match self {
+            VoltageTier::ULV => 8,
+            VoltageTier::LV => 32,
+            VoltageTier::MV => 128,
+            VoltageTier::HV => 512,
+            VoltageTier::EV => 2048,
+            VoltageTier::IV => 8192,
+            VoltageTier::LUV => 32768,
+            VoltageTier::ZPM => 131072,
+            VoltageTier::UV => 524288,
+            VoltageTier::UHV => 2097152,
+            VoltageTier::UEV => 8388608,
+            VoltageTier::UIV => 33554432,
+            VoltageTier::UMV => 134217728,
+            VoltageTier::UXV => 536870912,
+            VoltageTier::MAX => 2147483640,
+        }
+    }
+}
+
+pub trait Machine {
+    /// 最大并行
+    fn max_parallels(&self) -> u64;
+    /// 额定功率
+    fn rated_power(&self) -> u64;
+    /// 电压等级
+    fn voltage_level(&self) -> u64;
+    /// 功率系数
+    /// 指的是对配方原始功率的折扣，一般小于等于100%
+    fn power_efficiency(&self) -> f64;
+    /// 运行速度
+    /// 指的是对配方原始执行时间的折扣，一般大于等于100%
+    fn operation_speed(&self) -> f64;
+    /// 计算超频
+    /// 返回超频后的时间和功率倍率
+    /// 如一次无损超频返回 (2, 4)，两次无损超频返回 (4, 16)
+    /// 这样就兼容混合超频，特殊超频等
+    fn calculate_overclock(&self, recipe: &ActualRecipe) -> (f64, f64);
+    /// 对 4 求指数，即 floor(log_4(n))
+    /// 这是计算超频的辅助函数
+    // TODO: 需要测试
+    fn floor_log4(&self, n: f64) -> u32 {
+        let n = n;
+        let eps = 1e-12;
+
+        let num_float: f64 = n.log2() / 2.0;
+        let mut num = num_float.floor() as i32;
+
+        if 4.0_f64.powi(num) > n + eps {
+            num -= 1;
+        }
+
+        while 4.0_f64.powi(num + 1) <= n + eps {
+            num += 1;
+        }
+
+        num as u32
+    }
+}
+
+/// 单方块机器
+/// 所有属性基本固定
+/// 少数属性只要电压就能计算
+/// 所以有了这个结构体
+pub struct SingleBlockMachine {
+    pub kind: SingleKind,
+    pub voltage: VoltageTier,
+}
+
+pub struct MultiBlockMachine {}
+
+impl Machine for SingleBlockMachine {
+    /// 单方块机器的并行总是1
+    fn max_parallels(&self) -> u64 {
+        1
+    }
+
+    /// 单方块机器一般不省电
+    fn power_efficiency(&self) -> f64 {
+        1.0
+    }
+
+    /// 单方块机器一般不省时间
+    fn operation_speed(&self) -> f64 {
+        1.0
+    }
+
+    fn rated_power(&self) -> u64 {
+        let standard_voltage: u64 = self.voltage.standard_voltage();
+        let standard_amperage: u64 = match self.kind {
+            // 电弧炉的额定功率是 3A * 标准电压
+            SingleKind::ArcFurnace => 3,
+            // 热力离心机的额定功率是 2A * 标准电压
+            SingleKind::ThermalCentrifuge => 2,
+            // 其他机器的额定功率是 1A * 标准电压
+            _ => 1,
+        };
+        standard_voltage * standard_amperage
+    }
+
+    /// 单方块机器的电压等级与额定功率相等
+    fn voltage_level(&self) -> u64 {
+        self.rated_power()
+    }
+
+    /// 单方块机器的超频基本上是有损超频
+    /// 除了质量发生器，但是我没有加到枚举里面
+    fn calculate_overclock(&self, recipe: &ActualRecipe) -> (f64, f64) {
+        let actual_power = recipe.power.0;
+        let rated_power = self.rated_power();
+        // 这是额定功率和实际功率的比值
+        let n = rated_power as f64 / actual_power;
+
+        let num = self.floor_log4(n);
+
+        let time_base: i32 = 2;
+        let power_base: i32 = 4;
+
+        (time_base.pow(num) as f64, power_base.pow(num) as f64)
+    }
+}
+
 pub enum AnyMachine {
     SingleBlock(SingleKind),
     MultiBlock(MultiKind),
