@@ -155,6 +155,28 @@ pub trait Machine {
     fn rated_power(&self) -> u64;
     /// 电压等级
     fn voltage_level(&self) -> u64;
+    /// 电压序数
+    fn voltage_n(&self) -> u64 {
+        match self.rated_power() {
+            1..=8 => 0,
+            9..=32 => 1,
+            33..=128 => 2,
+            129..=512 => 3,
+            513..=2048 => 4,
+            2049..=8192 => 5,
+            8193..=32_768 => 6,
+            32_769..=131_072 => 7,
+            131_073..=524_288 => 8,
+            524_289..=2_097_152 => 9,
+            2_097_153..=8_388_608 => 10,
+            8_388_609..=33_554_432 => 11,
+            33_554_433..=134_217_728 => 12,
+            134_217_729..=536_870_912 => 13,
+            536_870_913..=2_147_483_640 => 14,
+            2_147_483_641.. => 15,
+            _ => 0,
+        }
+    }
     /// 功率系数
     /// 指的是对配方原始功率的折扣，一般小于等于100%
     fn power_efficiency(&self) -> f64;
@@ -170,7 +192,6 @@ pub trait Machine {
     /// 这是计算超频的辅助函数
     // TODO: 需要测试
     fn floor_log4(&self, n: f64) -> u32 {
-        let n = n;
         let eps = 1e-12;
 
         let num_float: f64 = n.log2() / 2.0;
@@ -196,8 +217,6 @@ pub struct SingleBlockMachine {
     pub kind: SingleKind,
     pub voltage: VoltageTier,
 }
-
-pub struct MultiBlockMachine {}
 
 impl Machine for SingleBlockMachine {
     /// 单方块机器的并行总是1
@@ -240,9 +259,9 @@ impl Machine for SingleBlockMachine {
         let rated_power = self.rated_power();
         // 这是额定功率和实际功率的比值
         let n = rated_power as f64 / actual_power;
-
+        // 这是超过有损超频的次数
         let num = self.floor_log4(n);
-
+        // 单方块默认 2/4 有损超频
         let time_base: i32 = 2;
         let power_base: i32 = 4;
 
@@ -250,7 +269,155 @@ impl Machine for SingleBlockMachine {
     }
 }
 
+/// 这个是能源仓类型
+pub enum EnergyHatchKind {
+    // 常规能源仓
+    Regular,
+    // 多安能源仓
+    MultiAmp(u64),
+    // 激光仓
+    Laser(u64),
+}
+
+/// 定义了能源仓的行为
+pub trait EnergyHatchBehavior {
+    fn standard_voltage(&self) -> u64;
+    fn standard_amperage(&self) -> u64;
+    fn rated_power(&self) -> u64 {
+        self.standard_voltage() * self.standard_amperage()
+    }
+}
+
+// 定义了一个能源仓
+pub struct EnergyHatch {
+    pub kind: EnergyHatchKind,
+    pub voltage: VoltageTier,
+}
+
+impl EnergyHatchBehavior for EnergyHatch {
+    /// 返回能源仓的标准电压
+    fn standard_voltage(&self) -> u64 {
+        self.voltage.standard_voltage()
+    }
+    /// 返回能源仓的额定电流
+    fn standard_amperage(&self) -> u64 {
+        match self.kind {
+            EnergyHatchKind::Regular => 2,
+            EnergyHatchKind::MultiAmp(amp) => amp,
+            EnergyHatchKind::Laser(amp) => amp,
+        }
+    }
+}
+
+pub struct MultiBlockMachine {
+    pub kind: MultiKind,
+    pub energy_hatches: HashMap<EnergyHatch, u64>,
+}
+
+impl Machine for MultiBlockMachine {
+    /// 多方块机器的额定功率
+    fn rated_power(&self) -> u64 {
+        let hatch_num = self.energy_hatches.len();
+
+        // 只有一个能源仓
+        if hatch_num == 1 {
+            let (hatch, num) = self.energy_hatches.iter().next().unwrap();
+
+            match hatch.kind {
+                EnergyHatchKind::Regular => hatch.rated_power() * num / 2,
+                EnergyHatchKind::MultiAmp(_) => hatch.rated_power() * num,
+                EnergyHatchKind::Laser(_) => hatch.rated_power() * num,
+            }
+        }
+        // 有多个能源仓
+        else {
+            self.energy_hatches
+                .iter()
+                .map(|h| {
+                    let (hatch, num) = h;
+                    hatch.rated_power() * num
+                })
+                .sum()
+        }
+    }
+
+    fn max_parallels(&self) -> u64 {
+        match self.kind {
+            _ => 1,
+        }
+    }
+
+    fn power_efficiency(&self) -> f64 {
+        match self.kind {
+            _ => 1.0,
+        }
+    }
+
+    fn operation_speed(&self) -> f64 {
+        match self.kind {
+            _ => 1.0,
+        }
+    }
+    /// 多方块机器的电压等级
+    /// 有四种类型：提升一级、无法提升、降低一级、不受限制
+    fn voltage_level(&self) -> u64 {
+        match self.kind {
+            // 默认是提升一级
+            _ => {
+                4 * self
+                    .energy_hatches
+                    .iter()
+                    .map(|h| h.0.standard_voltage())
+                    .sum::<u64>()
+                    / self.energy_hatches.len() as u64
+            }
+        }
+    }
+    fn calculate_overclock(&self, recipe: &ActualRecipe) -> (f64, f64) {
+        todo!()
+    }
+}
+
 pub enum AnyMachine {
-    SingleBlock(SingleKind),
-    MultiBlock(MultiKind),
+    SingleBlock(SingleBlockMachine),
+    MultiBlock(MultiBlockMachine),
+}
+
+impl Machine for AnyMachine {
+    fn max_parallels(&self) -> u64 {
+        match self {
+            Self::SingleBlock(machine) => machine.max_parallels(),
+            Self::MultiBlock(machine) => machine.max_parallels(),
+        }
+    }
+    fn calculate_overclock(&self, recipe: &ActualRecipe) -> (f64, f64) {
+        match self {
+            Self::MultiBlock(machine) => machine.calculate_overclock(recipe),
+            Self::SingleBlock(machine) => machine.calculate_overclock(recipe),
+        }
+    }
+    fn rated_power(&self) -> u64 {
+        match self {
+            Self::SingleBlock(machine) => machine.rated_power(),
+            Self::MultiBlock(machine) => machine.rated_power(),
+        }
+    }
+    fn voltage_level(&self) -> u64 {
+        match self {
+            Self::SingleBlock(machine) => machine.voltage_level(),
+            Self::MultiBlock(machine) => machine.voltage_level(),
+        }
+    }
+    fn power_efficiency(&self) -> f64 {
+        match self {
+            Self::MultiBlock(machine) => machine.power_efficiency(),
+            Self::SingleBlock(machine) => machine.power_efficiency(),
+        }
+    }
+    fn operation_speed(&self) -> f64 {
+        match self {
+            Self::SingleBlock(machine) => machine.operation_speed(),
+            Self::MultiBlock(machine) => machine.operation_speed(),
+        }
+    }
 }
