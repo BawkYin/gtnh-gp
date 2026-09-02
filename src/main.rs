@@ -13,6 +13,7 @@ pub struct RawRecipe {
     pub inputs: HashMap<String, u64>,
     pub outputs: HashMap<String, (u64, f64)>,
     pub catalysts: HashMap<String, u64>,
+    pub heating_capacity: Option<u64>,
 }
 
 /// 配方的实际执行速度，超频前，折扣后
@@ -26,6 +27,7 @@ pub struct ActualRecipe {
     pub inputs: HashMap<String, u64>,
     pub outputs: HashMap<String, (u64, f64)>,
     pub catalysts: HashMap<String, u64>,
+    pub heating_capacity: Option<u64>,
 }
 
 /// 配方的最终执行速度，超频后，折扣后
@@ -41,9 +43,19 @@ pub struct OverClockRecipe {
     pub inputs: HashMap<String, u64>,
     pub outputs: HashMap<String, (u64, f64)>,
     pub catalysts: HashMap<String, u64>,
+    pub heating_capacity: Option<u64>,
+}
+
+/// 子通道
+pub trait SubChannel {
+    /// 子通道名
+    fn channel() -> String;
+    /// 子通道值
+    fn value(&self) -> u64;
 }
 
 /// 这是线圈方块
+#[derive(Debug, Clone, Copy)]
 pub enum CoilBlockKind {
     Cupronickel,       // 白铜
     Kanthal,           // 坎塔尔合金
@@ -83,6 +95,31 @@ impl CoilBlock for CoilBlockKind {
             Self::Infinity => 11701,
             Self::Hypogen => 12601,
             Self::Eternal => 13501,
+        }
+    }
+}
+
+impl SubChannel for CoilBlockKind {
+    fn channel() -> String {
+        "coli".to_owned()
+    }
+
+    fn value(&self) -> u64 {
+        match self {
+            Self::Cupronickel => 1,
+            Self::Kanthal => 2,
+            Self::Nichrome => 3,
+            Self::TPVAlloy => 4,
+            Self::HssG => 5,
+            Self::Naquadah => 6,
+            Self::NaquadahAlloy => 7,
+            Self::ElectrumFlux => 8,
+            Self::AwakenedDraconium => 9,
+            Self::HssS => 10,
+            Self::Trinium => 11,
+            Self::Infinity => 12,
+            Self::Hypogen => 13,
+            Self::Eternal => 14,
         }
     }
 }
@@ -152,7 +189,7 @@ pub enum MultiKind {
     LargeChemicalReactor, // 大型化学反应釜
     // 工业高炉
     // coil: 线圈炉温
-    ElectricBlastFurnace { coil: u64 },
+    ElectricBlastFurnace { coil: CoilBlockKind },
 }
 
 // 电压等级
@@ -195,6 +232,27 @@ impl VoltageTier {
             VoltageTier::MAX => 2147483640,
         }
     }
+    /// 将电压装换成电压序数
+    /// 方便多方块结构的计算
+    pub fn voltage_n(self) -> u64 {
+        match self {
+            VoltageTier::ULV => 0,
+            VoltageTier::LV => 1,
+            VoltageTier::MV => 2,
+            VoltageTier::HV => 3,
+            VoltageTier::EV => 4,
+            VoltageTier::IV => 5,
+            VoltageTier::LUV => 6,
+            VoltageTier::ZPM => 7,
+            VoltageTier::UV => 8,
+            VoltageTier::UHV => 9,
+            VoltageTier::UEV => 10,
+            VoltageTier::UIV => 11,
+            VoltageTier::UMV => 12,
+            VoltageTier::UXV => 13,
+            VoltageTier::MAX => 14,
+        }
+    }
 }
 
 pub trait Machine {
@@ -228,7 +286,8 @@ pub trait Machine {
     }
     /// 功率系数
     /// 指的是对配方原始功率的折扣，一般小于等于100%
-    fn power_efficiency(&self) -> f64;
+    /// 有可能需要根据配方来计算，如工业高炉
+    fn power_efficiency(&self, recipe: &RawRecipe) -> f64;
     /// 运行速度
     /// 指的是对配方原始执行时间的折扣，一般大于等于100%
     fn operation_speed(&self) -> f64;
@@ -274,7 +333,7 @@ impl Machine for SingleBlockMachine {
     }
 
     /// 单方块机器一般不省电
-    fn power_efficiency(&self) -> f64 {
+    fn power_efficiency(&self, _recipe: &RawRecipe) -> f64 {
         1.0
     }
 
@@ -396,9 +455,40 @@ impl Machine for MultiBlockMachine {
         }
     }
 
-    fn power_efficiency(&self) -> f64 {
+    fn power_efficiency(&self, recipe: &RawRecipe) -> f64 {
         match self.kind {
-            MultiKind::LargeChemicalReactor | MultiKind::ElectricBlastFurnace { coil: _ } => 1.0,
+            // 没有功率折扣的机器
+            // 大型化学反应釜
+            MultiKind::LargeChemicalReactor => 1.0,
+            // 工业高炉
+            // 每高过配方炉温900K，就累乘 0.95
+            MultiKind::ElectricBlastFurnace { coil } => {
+                // 基础炉温
+                let base_heating_capacity = coil.base_heating_capacity();
+                // 工业高炉的电压每超过MV一个等级获得100K的加成
+                let voltage_n = self.voltage_n() - VoltageTier::MV.voltage_n();
+                let increases_heat = if voltage_n > 0 { 100 * voltage_n } else { 0 };
+                // 获得工业高炉的炉温
+                let heating_capacity = base_heating_capacity + increases_heat;
+                // 获得配方需要的炉温
+                let recipe_heating_capacity = match recipe.heating_capacity {
+                    Some(h) => h,
+                    None => panic!("1"),
+                };
+                // 计算功率折扣
+                if base_heating_capacity < recipe_heating_capacity {
+                    panic!("工业高炉烧不了这个配方")
+                } else {
+                    // 工业高炉炉温超过配方炉温900K的次数
+                    let n = (heating_capacity - recipe_heating_capacity) / 900;
+                    // 最终的功率折扣系数
+                    let mut efficiency = 1.0;
+                    for _ in 0..n {
+                        efficiency *= 0.95;
+                    }
+                    efficiency
+                }
+            }
         }
     }
 
@@ -459,10 +549,10 @@ impl Machine for AnyMachine {
             Self::MultiBlock(machine) => machine.voltage_level(),
         }
     }
-    fn power_efficiency(&self) -> f64 {
+    fn power_efficiency(&self, recipe: &RawRecipe) -> f64 {
         match self {
-            Self::MultiBlock(machine) => machine.power_efficiency(),
-            Self::SingleBlock(machine) => machine.power_efficiency(),
+            Self::MultiBlock(machine) => machine.power_efficiency(recipe),
+            Self::SingleBlock(machine) => machine.power_efficiency(recipe),
         }
     }
     fn operation_speed(&self) -> f64 {
