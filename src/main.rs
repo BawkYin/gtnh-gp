@@ -43,6 +43,50 @@ pub struct OverClockRecipe {
     pub catalysts: HashMap<String, u64>,
 }
 
+/// 这是线圈方块
+pub enum CoilBlockKind {
+    Cupronickel,       // 白铜
+    Kanthal,           // 坎塔尔合金
+    Nichrome,          // 镍铬合金
+    TPVAlloy,          // 钛铂钒合金
+    HssG,              // 高速钢-G
+    Naquadah,          // 硅岩
+    NaquadahAlloy,     // 硅岩合金
+    ElectrumFlux,      // 通流琥珀金
+    AwakenedDraconium, // 觉醒龙
+    HssS,              // 高速钢-S
+    Trinium,           // 三元金属
+    Infinity,          // 无限
+    Hypogen,           // 海珀珍
+    Eternal,           // 永恒
+}
+
+pub trait CoilBlock {
+    /// 返回线圈方块的基础炉温，单位 Kelvin
+    fn base_heating_capacity(&self) -> u64;
+}
+
+impl CoilBlock for CoilBlockKind {
+    fn base_heating_capacity(&self) -> u64 {
+        match self {
+            Self::Cupronickel => 1801,
+            Self::Kanthal => 2701,
+            Self::Nichrome => 3601,
+            Self::TPVAlloy => 4501,
+            Self::HssG => 5401,
+            Self::Naquadah => 7201,
+            Self::NaquadahAlloy => 8101,
+            Self::ElectrumFlux => 9901,
+            Self::AwakenedDraconium => 10801,
+            Self::HssS => 6301,
+            Self::Trinium => 9001,
+            Self::Infinity => 11701,
+            Self::Hypogen => 12601,
+            Self::Eternal => 13501,
+        }
+    }
+}
+
 /// 这是单方块机器
 pub enum SingleKind {
     /// 处理类机器
@@ -104,7 +148,12 @@ pub enum SingleKind {
 
 /// 这是多方块机器
 /// 用到的时候在写
-pub enum MultiKind {}
+pub enum MultiKind {
+    LargeChemicalReactor, // 大型化学反应釜
+    // 工业高炉
+    // coil: 线圈炉温
+    ElectricBlastFurnace { coil: u64 },
+}
 
 // 电压等级
 pub enum VoltageTier {
@@ -343,19 +392,21 @@ impl Machine for MultiBlockMachine {
 
     fn max_parallels(&self) -> u64 {
         match self.kind {
-            _ => 1,
+            MultiKind::LargeChemicalReactor | MultiKind::ElectricBlastFurnace { coil: _ } => 1,
         }
     }
 
     fn power_efficiency(&self) -> f64 {
         match self.kind {
-            _ => 1.0,
+            MultiKind::LargeChemicalReactor | MultiKind::ElectricBlastFurnace { coil: _ } => 1.0,
         }
     }
 
     fn operation_speed(&self) -> f64 {
         match self.kind {
-            _ => 1.0,
+            // 没有速度减免的机器有：
+            // 工业高炉  大型化学反应釜
+            MultiKind::LargeChemicalReactor | MultiKind::ElectricBlastFurnace { coil: _ } => 1.0,
         }
     }
     /// 多方块机器的电压等级
@@ -363,7 +414,7 @@ impl Machine for MultiBlockMachine {
     fn voltage_level(&self) -> u64 {
         match self.kind {
             // 默认是提升一级
-            _ => {
+            MultiKind::LargeChemicalReactor | MultiKind::ElectricBlastFurnace { coil: _ } => {
                 4 * self
                     .energy_hatches
                     .iter()
