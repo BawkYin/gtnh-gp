@@ -515,7 +515,59 @@ impl Machine for MultiBlockMachine {
         }
     }
     fn calculate_overclock(&self, recipe: &ActualRecipe) -> (f64, f64) {
-        todo!()
+        match self.kind {
+            // 无条件无损超频的机器
+            // 大型化学反应釜
+            MultiKind::LargeChemicalReactor => {
+                // 配方实际功率
+                let mut recipe_power = recipe.power.0;
+                // 机器的电压等级
+                let machine_voltage_level = self.voltage_level();
+                if (machine_voltage_level as f64) < recipe_power {
+                    panic!("电压等级不够");
+                }
+                // 机器的额定功率
+                let machine_rated_power = self.rated_power();
+                if (machine_rated_power as f64) < recipe_power {
+                    panic!("额定功率不够");
+                }
+                // 无损超频的次数
+                let mut n = 1;
+                while recipe_power < (machine_rated_power as f64) {
+                    recipe_power *= 4.0;
+                    n += 1;
+                }
+                (4_f64.powi(n), 4_f64.powi(n))
+            }
+            // 无损超频和有损超频混合的机器
+            // 工业高炉
+            MultiKind::ElectricBlastFurnace { coil } => {
+                // 配方实际功率
+                let mut recipe_power = recipe.power.0;
+                // 机器的电压等级
+                let machine_voltage_level = self.voltage_level();
+                if (machine_voltage_level as f64) < recipe_power {
+                    panic!("电压等级不够");
+                }
+                // 机器的额定功率
+                let machine_rated_power = self.rated_power();
+                if (machine_rated_power as f64) < recipe_power {
+                    panic!("额定功率不够");
+                }
+                let mut n_imperfect = 1;
+                while recipe_power < (machine_rated_power as f64) {
+                    recipe_power *= 4.0;
+                    n_imperfect += 1;
+                }
+                let n_perfect =
+                    (coil.base_heating_capacity() - recipe.heating_capacity.unwrap()) / 1800;
+
+                (
+                    4_f64.powi(n_perfect as i32) * 2_f64.powi(n_imperfect - (n_perfect as i32)),
+                    4_f64.powi(n_imperfect),
+                )
+            }
+        }
     }
 }
 
