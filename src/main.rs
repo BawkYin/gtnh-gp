@@ -389,8 +389,11 @@ pub enum EnergyHatchKind {
 
 /// 定义了能源仓的行为
 pub trait EnergyHatchBehavior {
+    /// 能源仓的额定电压
     fn standard_voltage(&self) -> u64;
+    /// 能源仓的额定电流
     fn standard_amperage(&self) -> u64;
+    /// 能源仓的额定功率
     fn rated_power(&self) -> u64 {
         self.standard_voltage() * self.standard_amperage()
     }
@@ -425,9 +428,9 @@ pub struct MultiBlockMachine {
 impl Machine for MultiBlockMachine {
     /// 多方块机器的额定功率
     fn rated_power(&self) -> u64 {
+        // 能源仓的个数
         let hatch_num = self.energy_hatches.len();
-
-        // 只有一个能源仓
+        // 如果只有一个能源仓
         if hatch_num == 1 {
             let (hatch, num) = self.energy_hatches.iter().next().unwrap();
 
@@ -437,7 +440,7 @@ impl Machine for MultiBlockMachine {
                 EnergyHatchKind::Laser(_) => hatch.rated_power() * num,
             }
         }
-        // 有多个能源仓
+        // 如果有多个能源仓
         else {
             self.energy_hatches
                 .iter()
@@ -471,10 +474,7 @@ impl Machine for MultiBlockMachine {
                 // 获得工业高炉的炉温
                 let heating_capacity = base_heating_capacity + increases_heat;
                 // 获得配方需要的炉温
-                let recipe_heating_capacity = match recipe.heating_capacity {
-                    Some(h) => h,
-                    None => panic!("1"),
-                };
+                let recipe_heating_capacity = recipe.heating_capacity.unwrap();
                 // 计算功率折扣
                 if base_heating_capacity < recipe_heating_capacity {
                     panic!("工业高炉烧不了这个配方")
@@ -561,7 +561,7 @@ impl Machine for MultiBlockMachine {
                 }
                 let n_perfect =
                     (coil.base_heating_capacity() - recipe.heating_capacity.unwrap()) / 1800;
-
+                // 最后的混合倍率
                 (
                     4_f64.powi(n_perfect as i32) * 2_f64.powi(n_imperfect - (n_perfect as i32)),
                     4_f64.powi(n_imperfect),
